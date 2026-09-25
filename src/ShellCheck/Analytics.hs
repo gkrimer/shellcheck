@@ -1097,6 +1097,7 @@ prop_checkSingleQuotedVariables33 = verify checkSingleQuotedVariables "yq '.a as
 prop_checkSingleQuotedVariables34 = verify checkSingleQuotedVariables "yq '.has $x'"
 prop_checkSingleQuotedVariables35 = verify checkSingleQuotedVariables "yq '.x = ${VAR}'"
 prop_checkSingleQuotedVariables36 = verify checkSingleQuotedVariables "yq '.a' '$HOME/f.yaml'"
+prop_checkSingleQuotedVariables37 = verifyNot checkSingleQuotedVariables "yq '.a as $x | .b // '\"$D\"' | $x'"
 
 
 checkSingleQuotedVariables params t@(T_SingleQuoted id s) =
@@ -1157,14 +1158,16 @@ checkSingleQuotedVariables params t@(T_SingleQuoted id s) =
 
     -- yq variables only exist if declared with `as`/`ref`, or passed with --arg (kislyuk/yq)
     usesOnlyDeclaredYqVariables str =
-        let declared = yqArgNames ++ map (!! 2) (matchAllSubgroups yqDeclaration str)
-            used = map head (matchAllSubgroups yqVariable str)
-        in all (`elem` declared) used && not (subRegex yqVariable str "" `matches` re)
+        let used = map head (matchAllSubgroups yqVariable str)
+        in all (`elem` yqDeclared) used && not (subRegex yqVariable str "" `matches` re)
     yqVariable = mkRegex "\\$([a-zA-Z_][a-zA-Z0-9_]*)"
     yqDeclaration = mkRegex "(^|[^a-zA-Z0-9_])(as|ref)[[:space:]]+\\$([a-zA-Z_][a-zA-Z0-9_]*)"
-    yqArgNames = fromMaybe [] $ do
+    -- Declarations can be in another single quoted part, e.g. 'a as $x | '"$shell"' | $x'
+    yqDeclared = fromMaybe [] $ do
         T_SimpleCommand _ _ words <- getClosestCommand parents t >>= getCommand
-        return $ argNames $ map getLiteralString words
+        return $ argNames (map getLiteralString words)
+            ++ concatMap yqDeclaredIn [str | T_NormalWord _ parts <- words, T_SingleQuoted _ str <- parts]
+    yqDeclaredIn str = map (!! 2) (matchAllSubgroups yqDeclaration str)
     argNames (Just flag : Just name : rest)
         | flag `elem` ["--arg", "--argjson"] = name : argNames rest
     argNames (_ : rest) = argNames rest
