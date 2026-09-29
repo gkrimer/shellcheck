@@ -1086,12 +1086,26 @@ prop_checkSingleQuotedVariables22 = verifyNot checkSingleQuotedVariables "jq '$_
 prop_checkSingleQuotedVariables23 = verifyNot checkSingleQuotedVariables "command jq '$__loc__'"
 prop_checkSingleQuotedVariables24 = verifyNot checkSingleQuotedVariables "exec jq '$__loc__'"
 prop_checkSingleQuotedVariables25 = verifyNot checkSingleQuotedVariables "exec -c -a foo jq '$__loc__'"
+prop_checkSingleQuotedVariables26 = verifyNot checkSingleQuotedVariables "yq '.metadata.name as $id | $id'"
+prop_checkSingleQuotedVariables27 = verifyNot checkSingleQuotedVariables "yq '.items[] as $i ireduce (0; . + $i)'"
+prop_checkSingleQuotedVariables28 = verifyNot checkSingleQuotedVariables "yq '.a ref $r | $r = 1'"
+prop_checkSingleQuotedVariables29 = verifyNot checkSingleQuotedVariables "yq --arg v 1 '.x = $v'"
+prop_checkSingleQuotedVariables30 = verifyNot checkSingleQuotedVariables "x=$(command yq -N '.a as $x | $x' f.yaml)"
+prop_checkSingleQuotedVariables31 = verify checkSingleQuotedVariables "yq '.x = \"$VAR\"'"
+prop_checkSingleQuotedVariables32 = verify checkSingleQuotedVariables "yq '.x = $VAR'"
+prop_checkSingleQuotedVariables33 = verify checkSingleQuotedVariables "yq '.a as $x | $y'"
+prop_checkSingleQuotedVariables34 = verify checkSingleQuotedVariables "yq '.has $x'"
+prop_checkSingleQuotedVariables35 = verify checkSingleQuotedVariables "yq '.x = ${VAR}'"
+prop_checkSingleQuotedVariables36 = verify checkSingleQuotedVariables "yq '.a' '$HOME/f.yaml'"
+prop_checkSingleQuotedVariables37 = verifyNot checkSingleQuotedVariables "yq '.a as $x | .b // '\"$D\"' | $x'"
 
 
 checkSingleQuotedVariables params t@(T_SingleQuoted id s) =
     when (s `matches` re) $
         if "sed" == commandName
         then unless (s `matches` sedContra) showMessage
+        else if "yq" == commandName
+        then unless (usesOnlyDeclaredYqVariables s) showMessage
         else unless isProbablyOk showMessage
   where
     parents = parentMap params
@@ -1141,6 +1155,23 @@ checkSingleQuotedVariables params t@(T_SingleQuoted id s) =
 
     re = mkRegex "\\$[{(0-9a-zA-Z_]|`[^`]+`"
     sedContra = mkRegex "\\$[{dpsaic]($|[^a-zA-Z])"
+
+    -- yq variables only exist if declared with `as`/`ref`, or passed with --arg (kislyuk/yq)
+    usesOnlyDeclaredYqVariables str =
+        let used = map head (matchAllSubgroups yqVariable str)
+        in all (`elem` yqDeclared) used && not (subRegex yqVariable str "" `matches` re)
+    yqVariable = mkRegex "\\$([a-zA-Z_][a-zA-Z0-9_]*)"
+    yqDeclaration = mkRegex "(^|[^a-zA-Z0-9_])(as|ref)[[:space:]]+\\$([a-zA-Z_][a-zA-Z0-9_]*)"
+    -- Declarations can be in another single quoted part, e.g. 'a as $x | '"$shell"' | $x'
+    yqDeclared = fromMaybe [] $ do
+        T_SimpleCommand _ _ words <- getClosestCommand parents t >>= getCommand
+        return $ argNames (map getLiteralString words)
+            ++ concatMap yqDeclaredIn [str | T_NormalWord _ parts <- words, T_SingleQuoted _ str <- parts]
+    yqDeclaredIn str = map (!! 2) (matchAllSubgroups yqDeclaration str)
+    argNames (Just flag : Just name : rest)
+        | flag `elem` ["--arg", "--argjson"] = name : argNames rest
+    argNames (_ : rest) = argNames rest
+    argNames [] = []
 
     getFindCommand (T_SimpleCommand _ _ words) =
         let list = map getLiteralString words
